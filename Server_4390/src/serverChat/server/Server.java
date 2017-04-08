@@ -9,14 +9,15 @@ import keys.RSA;
 
 public class Server
 {
-	public static final int DEFAULT_PORT = 4434;
+	public static final int UDP_DEFAULT_PORT = 4434;
+	public static final int TCP_DEFAULT_PORT = 4435;
 	
 	public static final byte HELLO = 1;
 	public static final byte HELLO_LENGTH = 8;//length of message in bytes
 	public static final byte CHALLENGE = 2;
-	public static final byte CHALLENGE_LENGTH = 8;
+	public static final byte CHALLENGE_LENGTH = 16;
 	public static final byte RESPONSE = 3;
-	public static final byte RESPONSE_LENGTH = 16;
+	public static final byte RESPONSE_LENGTH = 12;
 	public static final byte AUTH_SUCCESS = 4;
 	public static final byte AUTH_FAIL = 5;
 	public static final byte CONNECT = 6;
@@ -39,7 +40,7 @@ public class Server
 	
 	public Server()
 	{
-		this(DEFAULT_PORT);
+		this(UDP_DEFAULT_PORT);
 	}
 	public Server(int portNum)
 	{

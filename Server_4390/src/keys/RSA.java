@@ -23,7 +23,12 @@ public final class RSA
 			
 	}
 	 
-	public int genKeys()
+	public PublicKey getPublicKey()
+	{
+		return kPublic;
+	}
+	
+	public boolean genKeys()
 	{
 		KeyPairGenerator kpg = null;
 		try 
@@ -33,13 +38,13 @@ public final class RSA
 		catch (NoSuchAlgorithmException e) 
 		{
 			e.printStackTrace();
-			return 1;
+			return false;
 		}
 		kpg.initialize(1024);
 		KeyPair kp = kpg.genKeyPair();
 		kPublic = kp.getPublic();
 		kPrivate = kp.getPrivate();		
-		return 0;
+		return true;
 	}
 	
 	public byte[] encrypt(String s)
