@@ -8,9 +8,9 @@ public class Client
 {
 	private Socket socket;
 	private long clientID;
-	private String CK_Key;
+	private long CK_Key;
 	
-	public Client(Socket s, long clientID, String key)
+	public Client(Socket s, long clientID, long key)
 	{
 		socket = s;
 		this.clientID = clientID;
@@ -22,7 +22,7 @@ public class Client
 		return socket;
 	}
 	
-	public String getKey()
+	public long getKey()
 	{
 		return CK_Key;
 	}

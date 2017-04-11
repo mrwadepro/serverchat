@@ -382,7 +382,7 @@ public class COMP_128
 	public static String cipher(String data, long key)
 	{
 		//TODO actually encrypt the data
-		ByteBuffer bf = ByteBuffer.allocate(Long.BYTES).putLong(key);
+		//ByteBuffer bf = ByteBuffer.allocate(Long.BYTES).putLong(key);
 		
 		
 		return data;
