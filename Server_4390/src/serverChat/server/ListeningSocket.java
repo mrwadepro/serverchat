@@ -4,6 +4,8 @@ import java.io.IOException;
 import java.math.BigInteger;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.net.SocketException;
 import java.net.SocketTimeoutException;
 import java.nio.ByteBuffer;
@@ -43,6 +45,7 @@ public class ListeningSocket implements Runnable
 		{
 			try 
 			{
+//wait for HELLO
 				socket.receive(p);
 				System.out.println("recieved packet from "+p.getAddress());
 				
@@ -109,6 +112,7 @@ public class ListeningSocket implements Runnable
 				failConnect();
 				return;
 			}
+//DONE check for HELLO
 //send CHALLENGE(random) TODO add encryption 2.2
 			String rand = COMP_128.gen_rand_128Bit();
 			packet.setLength(Server.CHALLENGE_LENGTH+1);
@@ -125,8 +129,8 @@ public class ListeningSocket implements Runnable
 				ds.close();
 				return;
 			}
-//Receive RESPONSE(ID, verification)
-			System.out.println("working on response...");
+//DONE send CHALLENGE(random)
+//Receive RESPONSE(ID, verification), gen CK_A
 			long vals[] = COMP_128.A3A8(rand, key);
 			long CK_A = vals[0];
 			int authentication = (int)vals[1];
@@ -167,8 +171,134 @@ public class ListeningSocket implements Runnable
 				failConnect();
 				return;
 			}
+//DONE Receive RESPONSE(ID, verification)
 //TODO send AUTH_SUCCESS(rand_cookie, port_number)  encryption: CK-A
+			ServerSocket ss = null;
+			try 
+			{
+				ss = new ServerSocket();
+			} 
+			catch (IOException e)
+			{
+				e.printStackTrace();
+				failConnect();
+				return;
+			}
+			int port = ss.getLocalPort();
+			String rand_cookie = COMP_128.gen_rand_128Bit();
+			//TODO for now cipher just returns the data given, so length 16b 
+			String rand_cookie_enc = COMP_128.cipher(rand_cookie, CK_A);
+			bf = ByteBuffer.allocate(rand_cookie_enc.length()+Integer.BYTES + 1);
+			bf.put(Server.AUTH_SUCCESS);
+			for(int x =0; x< rand_cookie_enc.length(); x++)
+			{
+				bf.put((byte)rand_cookie_enc.charAt(x));
+			}
+			bf.putInt(port);
+			
+			packet.setLength(bf.limit());
+			packet.setData(bf.array());
+			try 
+			{
+				ds.send(packet);
+			}
+			catch (IOException e1)
+			{
+				e1.printStackTrace();
+				failConnect();
+				return;
+			}		
+//DONE send AUTH_SUCCESS(rand_cookie, port_number)  encryption: CK-A
 //establish TCP connection on port port_number, store port
+			timeouts = 0;
+			Socket clientSock = null;
+			while(timeouts < MAX_TIMEOUT)
+			{
+				try 
+				{
+					clientSock = ss.accept();
+				} 
+				catch(SocketTimeoutException e)
+				{
+					timeouts++;
+				}
+				catch (IOException e)
+				{
+					e.printStackTrace();
+					return;
+				}
+			}
+			if(timeouts >= MAX_TIMEOUT)
+			{
+				failConnect();
+				try
+				{
+					ss.close();
+				} 
+				catch (IOException e) 
+				{
+					e.printStackTrace();
+				}
+				return;
+			}
+			try
+			{
+				ss.close();
+			} 
+			catch (IOException e) 
+			{
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			}
+
+//DONE establish TCP connection on port port_number, store port
+//receive CONNECT(rand_cookie)
+			Client client = new Client(clientSock,id, CK_A);
+			byte cookie_ret[] = new byte[16];
+			try 
+			{
+				if(clientSock.getInputStream().read(cookie_ret) !=16)
+				{
+					failConnect();
+					return;
+				}
+			} 
+			catch (IOException e)
+			{
+				e.printStackTrace();
+				failConnect();
+				try
+				{
+					clientSock.close();
+				} 
+				catch (IOException e1) 
+				{
+					e1.printStackTrace();
+				}
+				return;
+			}
+			String cRet = "";
+			for(int x =0; x< cookie_ret.length; x++)
+			{
+				cRet+= (char)cookie_ret[x];
+			}
+			cRet = COMP_128.cipher(cRet, client.getKey());
+			if(!cRet.equals(rand_cookie))
+			{
+				failConnect();
+				try
+				{
+					clientSock.close();
+				} 
+				catch (IOException e) 
+				{
+					e.printStackTrace();
+				}
+				return;
+			}
+			Server.addClient(client);
+			ds.close();
+//DONE receive CONNECT(rand_cookie)			
 		}
 		
 		private void failConnect()
