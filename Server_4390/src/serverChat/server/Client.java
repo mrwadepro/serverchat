@@ -1,34 +1,58 @@
 package serverChat.server;
 
-import java.net.DatagramPacket;
-import java.net.InetAddress;
 import java.net.Socket;
+
+import javax.crypto.spec.SecretKeySpec;
 
 public class Client
 {
-	private Socket socket;
-	private long clientID;
-	private long CK_Key;
+	public static final long TIMEOUT_MAX = 15000;
 	
-	public Client(Socket s, long clientID, long key)
+	public final long ID;
+	public final SecretKeySpec CK_Key;
+	
+	private long curSession;
+	private Socket socket;
+	private long lastResponseTime;
+	
+	public Client(Socket s, long clientID, SecretKeySpec key)
 	{
 		socket = s;
-		this.clientID = clientID;
+		ID = clientID;
 		CK_Key = key;
+		curSession = -1;
+		lastResponseTime = System.currentTimeMillis();
 	}
 	
+	
+	public long getCurSession()
+	{
+		return curSession;
+	}
+	public void startSession(long session)
+	{
+		curSession = session;
+	}
+	public void endSession()
+	{
+		curSession = -1;
+	}
+	public boolean inSession()
+	{
+		return curSession !=-1;
+	}
 	public Socket getSocket()
 	{
 		return socket;
 	}
 	
-	public long getKey()
+	public void setLastResponseTime()
 	{
-		return CK_Key;
+		lastResponseTime = System.currentTimeMillis();
 	}
-	public long getID()
+	public long timeSinceLastResponse()
 	{
-		return clientID;
+		return System.currentTimeMillis()-lastResponseTime;
 	}
 	
 	

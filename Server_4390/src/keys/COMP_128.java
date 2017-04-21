@@ -1,12 +1,25 @@
 package keys;
 
+import java.io.UnsupportedEncodingException;
 import java.nio.ByteBuffer;
+import java.security.InvalidKeyException;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.Arrays;
+import java.util.Base64;
+
+import javax.crypto.BadPaddingException;
+import javax.crypto.Cipher;
+import javax.crypto.IllegalBlockSizeException;
+import javax.crypto.NoSuchPaddingException;
+import javax.crypto.spec.SecretKeySpec;
 
 public class COMP_128
 {
 /************************
  * a3a8
  ************************/
+	
 	private static char table_0[] = {
 	         102,177,186,162,  2,156,112, 75, 55, 25,  8, 12,251,193,246,188,
 	         109,213,151, 53, 42, 79,191,115,233,242,164,223,209,148,108,161,
@@ -77,6 +90,12 @@ public class COMP_128
 	     };
 	private static char table[][] = { table_0, table_1, table_2, table_3, table_4 };	
 	
+	/**
+	 * takes a 128 bit random number and a user key and makes a verification int and long cipher key
+	 * @param r random number
+	 * @param ke user key
+	 * @return long[long CK_A, int authenticator]
+	 */
 	public static long[] A3A8(/* in  16*/ String r, /* in 16*/ String ke)
 		 {
 			char key[] = ke.toCharArray();
@@ -118,17 +137,7 @@ public class COMP_128
 		 					x[j+16] |= bit[next_bit] << (7-k);
 		 				}
 		 			}
-		 	}
-		 
-		 	/*
-		 	 * ( At this stage the vector x[] consists of 32 nibbles.
-		 	 *   The first 8 of these are taken as the output SRES. )
-		 	 */
-		 
-		 	/* The remainder of the code is not given explicitly in the
-		 	 * standard, but was derived by reverse-engineering.
-		 	 */
-		 
+		 	}		 
 		 	for (i=0; i<4; i++)
 		 		simoutput[i] = (char)((x[2*i]<<4) | x[2*i+1]);
 		 	for (i=0; i<6; i++)
@@ -139,8 +148,6 @@ public class COMP_128
 		 	
 		 	long[] ret = new long[2];
 		 	ByteBuffer bf = ByteBuffer.allocate(Long.BYTES+Integer.BYTES);
-		 	System.out.println("simoutput length: "+simoutput.length);
-		 	System.out.println("bf limit: "+bf.limit());
 		 	for(int val =0; val< simoutput.length; val++)
 		 	{
 		 		bf.put((byte)simoutput[val]);
@@ -151,240 +158,98 @@ public class COMP_128
 		 	
 		 	return ret;
 		 }
-/************************
- * a5
- * Copyright (C) 1998-1999: Marc Briceno, Ian Goldberg, and David Wagner
- ************************/
-	
-	/* Masks for the three shift registers */
-	private static long R1MASK = 0x07FFFF; /* 19 bits, numbered 0..18 */
-	private static long R2MASK = 0x3FFFFF; /* 22 bits, numbered 0..21 */
-	private static long R3MASK = 0x7FFFFF; /* 23 bits, numbered 0..22 */
 
-	/* Middle bit of each of the three shift registers, for clock control */
-	private static long R1MID = 0x000100; /* bit 8 */
-	private static long R2MID =	0x000400; /* bit 10 */
-	private static long R3MID =	0x000400; /* bit 10 */
-
-	/* Feedback taps, for clocking the shift registers.
-	 * These correspond to the primitive polynomials
-	 * x^19 + x^5 + x^2 + x + 1, x^22 + x + 1,
-	 * and x^23 + x^15 + x^2 + x + 1. */
-	private static long R1TAPS = 0x072000; /* bits 18,17,16,13 */
-	private static long R2TAPS = 0x300000; /* bits 21,20 */
-	private static long R3TAPS = 0x700080; /* bits 22,21,20,7 */
-
-	/* Output taps, for output generation */
-	private static long R1OUT =	0x040000; /* bit 18 (the high bit) */
-	private static long R2OUT =	0x200000; /* bit 21 (the high bit) */
-	private static long R3OUT =	0x400000; /* bit 22 (the high bit) */
-
-//	typedef unsigned char byte;
-//	typedef unsigned long word;
-//	typedef word bit;
-	
-	/* Calculate the parity of a 32-bit word, i.e. the sum of its bits modulo 2 */
-	private static long parity(long x)
-	{
-		x ^= x>>16;
-		x ^= x>>8;
-		x ^= x>>4;
-		x ^= x>>2;
-		x ^= x>>1;
-		return x&1;
-	}
-
-	/* Clock one shift register */
-	private static long clockone(long reg, long mask, long taps) 
-	{
-		long t = reg & taps;
-		reg = (reg << 1) & mask;
-		reg |= parity(t);
-		return reg;
-	}
-
-	/* The three shift registers.  They're in global variables to make the code
-	 * easier to understand.
-	 * A better implementation would not use global variables. */
-	private static long R1, R2, R3;
-
-	/* Look at the middle bits of R1,R2,R3, take a vote, and
-	 * return the majority value of those 3 bits. */
-	private static boolean majority() {
-		long sum;
-		sum = parity(R1&R1MID) + parity(R2&R2MID) + parity(R3&R3MID);
-		if (sum >= 2)
-			return true;
-		else
-			return false;
-	}
-
-	/* Clock two or three of R1,R2,R3, with clock control
-	 * according to their middle bits.
-	 * Specifically, we clock Ri whenever Ri's middle bit
-	 * agrees with the majority value of the three middle bits.*/
-	private static void clock() {
-		boolean maj = majority();
-		if (((R1&R1MID)!=0) == maj)
-			R1 = clockone(R1, R1MASK, R1TAPS);
-		if (((R2&R2MID)!=0) == maj)
-			R2 = clockone(R2, R2MASK, R2TAPS);
-		if (((R3&R3MID)!=0) == maj)
-			R3 = clockone(R3, R3MASK, R3TAPS);
-	}
-
-	/* Clock all three of R1,R2,R3, ignoring their middle bits.
-	 * This is only used for key setup. */
-	private static void clockallthree() {
-		R1 = clockone(R1, R1MASK, R1TAPS);
-		R2 = clockone(R2, R2MASK, R2TAPS);
-		R3 = clockone(R3, R3MASK, R3TAPS);
-	}
-
-	/* Generate an output bit from the current state.
-	 * You grab a bit from each register via the output generation taps;
-	 * then you XOR the resulting three bits. */
-	private static long getbit()
-	{
-		return parity(R1&R1OUT)^parity(R2&R2OUT)^parity(R3&R3OUT);
-	}
-
-	/* Do the A5/1 key setup.  This routine accepts a 64-bit key and
-	 * a 22-bit frame number. */
-	private static void keysetup(long key[]/*8*/, long frame)
-	{
-		int i;
-		long keybit, framebit;
-
-		/* Zero out the shift registers. */
-		R1 = R2 = R3 = 0;
-
-		/* Load the key into the shift registers,
-		 * LSB of first byte of key array first,
-		 * clocking each register once for every
-		 * key bit loaded.  (The usual clock
-		 * control rule is temporarily disabled.) */
-		for (i=0; i<64; i++) {
-			clockallthree(); /* always clock */
-			keybit = (key[i/8] >> (i&7)) & 1; /* The i-th bit of the
-	key */
-			R1 ^= keybit; R2 ^= keybit; R3 ^= keybit;
-		}
-
-		/* Load the frame number into the shift
-		 * registers, LSB first,
-		 * clocking each register once for every
-		 * key bit loaded.  (The usual clock
-		 * control rule is still disabled.) */
-		for (i=0; i<22; i++) {
-			clockallthree(); /* always clock */
-			framebit = (frame >> i) & 1; /* The i-th bit of the frame #
-	*/
-			R1 ^= framebit; R2 ^= framebit; R3 ^= framebit;
-		}
-
-		/* Run the shift registers for 100 clocks
-		 * to mix the keying material and frame number
-		 * together with output generation disabled,
-		 * so that there is sufficient avalanche.
-		 * We re-enable the majority-based clock control
-		 * rule from now on. */
-		for (i=0; i<100; i++) {
-			clock();
-		}
-
-		/* Now the key is properly set up. */
-	}
-		
-	/* Generate output.  We generate 228 bits of
-	 * keystream output.  The first 114 bits is for
-	 * the A->B frame; the next 114 bits is for the
-	 * B->A frame.  You allocate a 15-byte buffer
-	 * for each direction, and this function fills
-	 * it in. */
-	private static void run(long AtoBkeystream[], long BtoAkeystream[])
-	{
-		int i;
-
-		/* Zero out the output buffers. */
-		for (i=0; i<=113/8; i++)
-			AtoBkeystream[i] = BtoAkeystream[i] = 0;
-		
-		/* Generate 114 bits of keystream for the
-		 * A->B direction.  Store it, MSB first. */
-		for (i=0; i<114; i++) {
-			clock();
-			AtoBkeystream[i/8] |= getbit() << (7-(i&7));
-		}
-
-		/* Generate 114 bits of keystream for the
-		 * B->A direction.  Store it, MSB first. */
-		for (i=0; i<114; i++) {
-			clock();
-			BtoAkeystream[i/8] |= getbit() << (7-(i&7));
-		}
-	}
-	
-	/* Test the code by comparing it against
-	 * a known-good test vector. */
-	public static void test() {
-		long key[] = {0x12, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF};
-		long frame = 0x134;
-		long goodAtoB[] = { 0x53, 0x4E, 0xAA, 0x58, 0x2F, 0xE8, 0x15,
-		                      0x1A, 0xB6, 0xE1, 0x85, 0x5A, 0x72, 0x8C, 0x00 };
-		long goodBtoA[] = { 0x24, 0xFD, 0x35, 0xA3, 0x5D, 0x5F, 0xB6,
-		                      0x52, 0x6D, 0x32, 0xF9, 0x06, 0xDF, 0x1A, 0xC0 };
-		long AtoB[] = new long[15], BtoA[] = new long[15];
-		int i, failed=0;
-
-		keysetup(key, frame);
-		run(AtoB, BtoA);
-
-		/* Compare against the test vector. */
-		for (i=0; i<15; i++)
-			if (AtoB[i] != goodAtoB[i])
-				failed = 1;
-		for (i=0; i<15; i++)
-			if (BtoA[i] != goodBtoA[i])
-				failed = 1;
-		
-		if (failed ==0) {
-			System.out.printf("Self-check succeeded: everything looks ok.\n");
-			return;
-		} 
-		else
-		{
-			/* Problems!  The test vectors didn't compare*/
-			System.out.printf("\nI don't know why this broke; contact the authors.\n");
-			System.exit(1);
-		}
-	}
-	/**
-	 * generates a random 128 bit number
-	 * @return a random 128 bit number
-	 */
 	public static String gen_rand_128Bit()
 	{
 		String ret = "";
 		for(int x = 0; x< 16; x++)
 		{
-			ret += (byte)(Math.random()*Byte.MAX_VALUE);
+			ret += (char)(Math.random()*Byte.MAX_VALUE);
 		}
 		return ret;
 	}
 	
-	/**
-	 * encrypts a string of data using a cipher key
-	 * @param data the data to encrypt
-	 * @param key the cipher key
-	 * @return encrypted data
-	 */
-	public static String cipher(String data, long key)
+	
+	public static String encrypt(String stringToEncrypt, SecretKeySpec secretKey)
 	{
-		//TODO actually encrypt the data
-		//ByteBuffer bf = ByteBuffer.allocate(Long.BYTES).putLong(key);
+		Cipher cipher = null;
+		try
+		{
+			cipher = Cipher.getInstance("AES/ECB/PKCS5Padding");
+		} 
+		catch (NoSuchAlgorithmException | NoSuchPaddingException e)
+		{
+			e.printStackTrace();
+		} 
+		try 
+		{
+			cipher.init(Cipher.ENCRYPT_MODE, secretKey);
+		} 
+		catch (InvalidKeyException e) 
+		{
+			e.printStackTrace();
+		}
+        byte[] encry = null;;
+		try 
+		{
+			encry = cipher.doFinal(stringToEncrypt.getBytes("UTF8"));
+		} 
+		catch (IllegalBlockSizeException | BadPaddingException | UnsupportedEncodingException e)
+		{
+			e.printStackTrace();
+		} 
+        return Base64.getEncoder().encodeToString(encry);
+    }
+    public static String decrypt(String stringToDecrypt, SecretKeySpec secretKey)
+    {
+    	Cipher cipher = null;
+		try 
+		{
+			cipher = Cipher.getInstance("AES/ECB/PKCS5PADDING");
+		} 
+		catch (NoSuchAlgorithmException | NoSuchPaddingException e)
+		{
+			e.printStackTrace();
+		} 
+    	try 
+    	{
+			cipher.init(Cipher.DECRYPT_MODE, secretKey);
+		} 
+    	catch (InvalidKeyException e) 
+    	{
+			e.printStackTrace();
+		}
+    	byte[] data  = null;
+        try
+        {
+			data = cipher.doFinal(Base64.getDecoder().decode(stringToDecrypt));
+		} 
+        catch (IllegalBlockSizeException | BadPaddingException e)
+        {
+			e.printStackTrace();
+		} 
+        String ret = "";
+        for(int x= 0; x< data.length; x++)
+        {
+        	ret+= (char)data[x];
+        }
+        return ret;
+    }
+    public static SecretKeySpec genKey(Long CK_A)
+    {
+		byte[] key = ByteBuffer.allocate(Long.BYTES).putLong(CK_A).array();
 		
-		
-		return data;
-	}
+        MessageDigest dig = null;
+        try 
+        {
+			dig = MessageDigest.getInstance("SHA-1");
+		} 
+        catch (NoSuchAlgorithmException e)
+        {
+			e.printStackTrace();
+		}
+        key = dig.digest(key);
+        key = Arrays.copyOf(key, 16);
+        return new SecretKeySpec(key, "AES"); //sets the secret key
+    }
 }

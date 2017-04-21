@@ -1,7 +1,6 @@
 package serverChat.server;
 
 import java.io.IOException;
-import java.math.BigInteger;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.ServerSocket;
@@ -9,7 +8,8 @@ import java.net.Socket;
 import java.net.SocketException;
 import java.net.SocketTimeoutException;
 import java.nio.ByteBuffer;
-import java.util.HashMap;
+
+import javax.crypto.spec.SecretKeySpec;
 
 import keys.COMP_128;
 import keys.UserKeys;
@@ -73,7 +73,7 @@ public class ListeningSocket implements Runnable
 	 */
 	private class ConnectionHandler implements Runnable
 	{
-		public static final int MAX_TIMEOUT = 3;
+		public static final int MAX_TIMEOUT = 10;
 		DatagramPacket packet;
 		DatagramSocket ds;
 		
@@ -113,8 +113,9 @@ public class ListeningSocket implements Runnable
 				return;
 			}
 //DONE check for HELLO
-//send CHALLENGE(random) TODO add encryption 2.2
+//send CHALLENGE(random)
 			String rand = COMP_128.gen_rand_128Bit();
+			packet.setData(new byte[Server.CHALLENGE_LENGTH+1]);
 			packet.setLength(Server.CHALLENGE_LENGTH+1);
 			packet.getData()[0] = Server.CHALLENGE;
 			for(int x =0; x< rand.length(); x++)
@@ -159,6 +160,7 @@ public class ListeningSocket implements Runnable
 			if(timeouts >= MAX_TIMEOUT)
 			{
 				failConnect();
+				System.out.println("timeout");
 				return;
 			}
 			bf = ByteBuffer.allocate(Long.BYTES+ Integer.BYTES).put(packet.getData(), 1, Long.BYTES+Integer.BYTES);
@@ -168,15 +170,18 @@ public class ListeningSocket implements Runnable
 			//authentication fail
 			if(id != idRet || authentication != authClient)
 			{
+				System.out.println(""+id+" "+ idRet);
+				System.out.println(""+authentication+" "+authClient);
 				failConnect();
+				System.out.println("Failed Verification");
 				return;
 			}
 //DONE Receive RESPONSE(ID, verification)
-//TODO send AUTH_SUCCESS(rand_cookie, port_number)  encryption: CK-A
+//send AUTH_SUCCESS(rand_cookie, port_number)  encryption: CK-A
 			ServerSocket ss = null;
 			try 
 			{
-				ss = new ServerSocket();
+				ss = new ServerSocket(Server.TCP_DEFAULT_PORT);
 			} 
 			catch (IOException e)
 			{
@@ -186,28 +191,45 @@ public class ListeningSocket implements Runnable
 			}
 			int port = ss.getLocalPort();
 			String rand_cookie = COMP_128.gen_rand_128Bit();
-			//TODO for now cipher just returns the data given, so length 16b 
-			String rand_cookie_enc = COMP_128.cipher(rand_cookie, CK_A);
-			bf = ByteBuffer.allocate(rand_cookie_enc.length()+Integer.BYTES + 1);
+			SecretKeySpec clientKey = COMP_128.genKey(CK_A);
+			
+			bf = ByteBuffer.allocate(1 + rand_cookie.length() + Integer.BYTES);
 			bf.put(Server.AUTH_SUCCESS);
-			for(int x =0; x< rand_cookie_enc.length(); x++)
+			for(int x =0; x< rand_cookie.length(); x++)
 			{
-				bf.put((byte)rand_cookie_enc.charAt(x));
+				bf.put((byte)rand_cookie.charAt(x));
 			}
 			bf.putInt(port);
+			String message = "";
+			for(int x= 0; x< bf.array().length; x++)
+			{
+				message += (char)(bf.array()[x]);
+			}
+			String message_enc = COMP_128.encrypt(message, clientKey);
 			
-			packet.setLength(bf.limit());
-			packet.setData(bf.array());
+			byte toSend[] = new byte[message_enc.length()];
+			for(int x= 0; x<toSend.length; x++)
+				toSend[x] = (byte)message_enc.charAt(x);
+			packet.setData(toSend);
+			packet.setLength(toSend.length);
 			try 
 			{
 				ds.send(packet);
 			}
-			catch (IOException e1)
+			catch (IOException e)
 			{
-				e1.printStackTrace();
+				e.printStackTrace();
 				failConnect();
+				try
+				{
+					ss.close();
+				} 
+				catch (IOException e1)
+				{
+					e1.printStackTrace();
+				}
 				return;
-			}		
+			}
 //DONE send AUTH_SUCCESS(rand_cookie, port_number)  encryption: CK-A
 //establish TCP connection on port port_number, store port
 			timeouts = 0;
@@ -217,6 +239,7 @@ public class ListeningSocket implements Runnable
 				try 
 				{
 					clientSock = ss.accept();
+					break;
 				} 
 				catch(SocketTimeoutException e)
 				{
@@ -225,6 +248,15 @@ public class ListeningSocket implements Runnable
 				catch (IOException e)
 				{
 					e.printStackTrace();
+					failConnect();
+					try 
+					{
+						ss.close();
+					} 
+					catch (IOException e1) 
+					{
+						e1.printStackTrace();
+					}
 					return;
 				}
 			}
@@ -247,20 +279,18 @@ public class ListeningSocket implements Runnable
 			} 
 			catch (IOException e) 
 			{
-				// TODO Auto-generated catch block
 				e.printStackTrace();
 			}
-
+			
 //DONE establish TCP connection on port port_number, store port
-//receive CONNECT(rand_cookie)
-			Client client = new Client(clientSock,id, CK_A);
-			byte cookie_ret[] = new byte[16];
+//receive CONNECT(rand_cookie 16 b)
+			Client client = new Client(clientSock,id, clientKey);
+			byte cookie_ret[] = new byte[44];
 			try 
 			{
-				if(clientSock.getInputStream().read(cookie_ret) !=16)
+				if(clientSock.getInputStream().read(cookie_ret)!=44)
 				{
-					failConnect();
-					return;
+					throw new IOException();
 				}
 			} 
 			catch (IOException e)
@@ -282,9 +312,10 @@ public class ListeningSocket implements Runnable
 			{
 				cRet+= (char)cookie_ret[x];
 			}
-			cRet = COMP_128.cipher(cRet, client.getKey());
-			if(!cRet.equals(rand_cookie))
+			cRet = COMP_128.decrypt(cRet, client.CK_Key);
+			if(!cRet.substring(1).equals(rand_cookie))
 			{
+				System.out.println("Keys not the same, exiting");
 				failConnect();
 				try
 				{
@@ -296,6 +327,7 @@ public class ListeningSocket implements Runnable
 				}
 				return;
 			}
+			client.setLastResponseTime();
 			Server.addClient(client);
 			ds.close();
 //DONE receive CONNECT(rand_cookie)			
@@ -320,31 +352,5 @@ public class ListeningSocket implements Runnable
 	public void shutDown()
 	{
 		running = false;
-	}
-	
-	public static void main(String args[])
-	{
-				
-//		ListeningSocket ls = null;
-//		try 
-//		{
-//			ls = new ListeningSocket(4434);
-//		} 
-//		catch (SocketException e)
-//		{
-//			e.printStackTrace();
-//			System.exit(1);
-//		}
-//		
-//		System.out.println("running...");
-//		ls.run();
-//		System.out.println("Done");
-		
-		COMP_128.test();
-		long key = 1235351312;
-		long frame = 1;
-		String data = "what a day";
-		System.out.println("data:" +data);
-		
 	}
 }
