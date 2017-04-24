@@ -7,11 +7,10 @@ import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.concurrent.*;
 
-import javax.crypto.spec.SecretKeySpec;
-
 import keys.COMP_128;
 import keys.UserKeys;
 import serverExceptions.NoMemberException;
+import ui.UI;
 
 public class Server
 {
@@ -53,12 +52,12 @@ public class Server
 	//END_NOTIF(long sessionID 8b)
 	public static final byte END_NOTIF = 12;
 	public static final byte END_NOTIF_LENGTH = 8;
-	//CHAT(long sessionID 8b, int messageLength 4b, message)
+	//CHAT(long sessionID 8b, message)
 	public static final byte CHAT = 13;
 	//HISTORY_REQ(long idB 8b)
 	public static final byte HISTORY_REQ = 14;
 	public static final byte HISTORY_REQ_LENGTH = 8;
-	//HISTORY_RESP(long id 8b, int messageLength 4b, message)
+	//HISTORY_RESP(long id 8b, message)
 	public static final byte HISTORY_RESP = 15;
 	
 /*****************************************
@@ -70,12 +69,12 @@ public class Server
 	private static int clientPosition;
 	private static ArrayList<ChatSession> sessions;
 	
-	private boolean running;
+	private volatile static boolean running;
 	private ListeningSocket listener;
-	private Thread listenerThread;
+	private UI ui;
+	private Thread listenerThread, UIThread;
 	private Client currentClient;
 	private InputStream curInput;
-	private byte buffer[];
 	
 	
 	public Server()
@@ -88,6 +87,7 @@ public class Server
 		 * create 2 threads, UI, and Listener, 
 		 * then this thread will handle the active clients
 		 */
+		ui =new UI();
 		try 
 		{
 			listener = new ListeningSocket(portNum);
@@ -97,6 +97,7 @@ public class Server
 			e.printStackTrace();
 		}
 		listenerThread = new Thread(listener);
+		UIThread = new Thread(ui);
 		clients = new ArrayList<Client>();
 		sessions = new ArrayList<ChatSession>();
 		clientPosition = 0;
@@ -108,12 +109,15 @@ public class Server
 		int inputLength;
 		
 		listenerThread.start();
+		UIThread.start();
 		
 		while(running)
 		{
 			
 			//get client
 			currentClient = getNextClient();
+			if(currentClient == null)
+				continue;
 			//check for input
 			try
 			{
@@ -129,7 +133,10 @@ public class Server
 				if(curInput.available()==0)
 				{
 					if(currentClient.timeSinceLastResponse()> Client.TIMEOUT_MAX)
+					{
+						System.out.println("User" + currentClient.ID +" timed out");
 						abortClient(currentClient);
+					}
 					continue;
 				}
 			} 
@@ -138,9 +145,14 @@ public class Server
 				e1.printStackTrace();
 				abortClient(currentClient);
 			}
+			byte inputL[] = new byte[4];
 			try 
 			{
-				inputLength = curInput.read();
+				if(curInput.read(inputL) != inputL.length)
+				{
+					abortClient(currentClient);
+					continue;
+				}
 			} 
 			catch (IOException e)
 			{
@@ -148,25 +160,31 @@ public class Server
 				abortClient(currentClient);
 				continue;
 			}
-			if(inputLength == -1)
-			{
-				abortClient(currentClient);
-				continue;
-			}
+			
+			ByteBuffer bf = ByteBuffer.allocate(Integer.BYTES).put(inputL);
+			bf.position(0);
+			inputLength = bf.getInt();
+			
 			
 			byte in[] = new byte[inputLength];
-			if(curInput.read(in) != in.length)
+			try 
 			{
-				//TODO did not read what was expected
-				continue;
+				if(curInput.read(in) != in.length)
+				{
+					//TODO did not read what was expected
+					continue;
+				}
+			} 
+			catch (IOException e)
+			{
+				e.printStackTrace();
 			}
+			in = COMP_128.decrypt(in, currentClient.CK_Key);
 			
-			in = decrypt(in, currentClient.CK_Key);
-			
-			ByteBuffer bf = ByteBuffer.allocate(in.length).put(in);
+			bf = ByteBuffer.allocate(in.length).put(in);
 			bf.position(0);
 			
-			switch(bf.getInt())
+			switch(bf.get())
 			{
 			case CHAT_REQUEST:
 				startChat(currentClient, bf);
@@ -183,6 +201,18 @@ public class Server
 			}
 			currentClient.setLastResponseTime();
 		}
+		for( Client c : clients)
+		{
+			try 
+			{
+				c.getSocket().close();
+			} 
+			catch (IOException e)
+			{
+				e.printStackTrace();
+			}
+		}
+		listener.shutDown();
 	}
 	/**
 	 * closes the socket and notifies the user they were chatting with if any
@@ -210,12 +240,14 @@ public class Server
 		removeClient(client);
 	}
 	/**
+	 * 	CHAT_REQUEST(long idB 8b)
 	 * starts a ChatSession with another user
 	 * @param client the client that sent the request
 	 * @param input the message from the client in a Byte buffer, currently at position 1
 	 */
 	public void startChat(Client client, ByteBuffer input)
 	{
+		
 		long otherID = input.getLong();
 		Client otherClient = null;
 		for(Client c : clients)
@@ -229,14 +261,14 @@ public class Server
 		if(otherClient == null || otherClient.inSession())
 		{
 			ByteBuffer bf = ByteBuffer.allocate(UNREACHABLE_LENGTH+1);
-			bf.put(UNREACHABLE).putLong(otherClient.ID);
+			bf.put(UNREACHABLE).putLong(otherID);
 			
-			byte sending[] = encrypt(bf.array(), client.CK_Key);
+			byte sending[] = COMP_128.encrypt(bf.array(), client.CK_Key);
+			ByteBuffer toSend = ByteBuffer.allocate(Integer.BYTES+sending.length).putInt(sending.length).put(sending);
 			
 			try 
 			{
-				client.getSocket().getOutputStream().write(sending.length);
-				client.getSocket().getOutputStream().write(sending);
+				client.getSocket().getOutputStream().write(toSend.array());
 				client.getSocket().getOutputStream().flush();
 			} 
 			catch (IOException e) 
@@ -253,15 +285,15 @@ public class Server
 			otherClient.startSession(cs.SESSION_ID);
 			
 			//send CHAT_STARTED to idA
+			//CHAT_STARTED(long sessionID 8b, long idB 8b)
 			ByteBuffer bf = ByteBuffer.allocate(CHAT_STARTED_LENGTH+1);
-			bf = bf.put(CHAT_STARTED).putLong(cs.SESSION_ID).putLong(otherClient.ID);
-			
-			byte sending[] = encrypt(bf.array(),client.CK_Key);
+			bf.put(CHAT_STARTED).putLong(cs.SESSION_ID).putLong(otherClient.ID);
+			byte sending[] = COMP_128.encrypt(bf.array(),client.CK_Key);
+			ByteBuffer toSend = ByteBuffer.allocate(Integer.BYTES+sending.length).putInt(sending.length).put(sending);
 			
 			try
 			{
-				client.getSocket().getOutputStream().write(sending.length);
-				client.getSocket().getOutputStream().write(sending);
+				client.getSocket().getOutputStream().write(toSend.array());
 				client.getSocket().getOutputStream().flush();
 			} 
 			catch (IOException e)
@@ -271,15 +303,13 @@ public class Server
 			}
 			
 			//send CHAT_STARTED to idB
-			bf.position(Long.BYTES+1);
-			bf.putLong(client.ID);
-			
-			sending = encrypt(bf.array(), otherClient.CK_Key);
-			
+			bf = ByteBuffer.allocate(CHAT_STARTED_LENGTH+1);
+			bf.put(CHAT_STARTED).putLong(cs.SESSION_ID).putLong(client.ID);
+			sending = COMP_128.encrypt(bf.array(), otherClient.CK_Key);
+			toSend = ByteBuffer.allocate(Integer.BYTES+sending.length).putInt(sending.length).put(sending);
 			try
 			{
-				otherClient.getSocket().getOutputStream().write(sending.length);
-				otherClient.getSocket().getOutputStream().write(sending);
+				otherClient.getSocket().getOutputStream().write(toSend.array());
 				otherClient.getSocket().getOutputStream().flush();
 			}
 			catch(IOException e)
@@ -297,16 +327,11 @@ public class Server
 	public void sendMessage(Client client, ByteBuffer input)
 	{
 		long seshid = input.getLong();
-		int messageLength = input.getInt();
 		
 		//confirm message data
 		if(client.getCurSession() != seshid)
 		{
 			//TODO client trying to send message in another session
-		}
-		if(messageLength < 0)
-		{
-			//TODO error with message length
 		}
 		ChatSession sesh = null;
 		for(ChatSession cs: sessions)
@@ -320,31 +345,16 @@ public class Server
 		if(sesh == null)
 		{
 			endSession(client, null);
-			//TODO session ended without notifying client
 		}
 		//save message and  send
 		else
 		{
-			buffer = new byte[messageLength];
-			
-			try
-			{
-				if(client.getSocket().getInputStream().read(buffer) != messageLength)
-				{
-					//TODO ERROR reading in message
-				}
-			} 
-			catch (IOException e)
-			{
-				e.printStackTrace();
-			}
-			
-			ByteBuffer bf = ByteBuffer.allocate(messageLength).put(buffer);
 			String message = "";
-			for(int x =0; x< bf.array().length; x++)
+			for(int x =9; x< input.array().length; x++)
 			{
-				message += (char)bf.array()[x];
+				message+=(char)input.array()[x];
 			}
+			
 			Client otherClient = null;
 			try 
 			{
@@ -355,17 +365,15 @@ public class Server
 			{
 				e.printStackTrace();
 			}
+						
+			ByteBuffer bf = ByteBuffer.allocate(Long.BYTES+message.length()+1).put(CHAT).putLong(seshid).put(stringToByteArray(message));
 			
-			
-			bf = ByteBuffer.allocate(Long.BYTES+Integer.BYTES+messageLength);
-			bf = bf.putLong(sesh.SESSION_ID).putInt(messageLength).put(buffer);
-			
-			byte toSend[] = encrypt(bf.array(), otherClient.CK_Key);
+			byte toSend[] = COMP_128.encrypt(bf.array(), otherClient.CK_Key);
+			bf = ByteBuffer.allocate(Integer.BYTES+toSend.length).putInt(toSend.length).put(toSend);
 			
 			try 
 			{
-				otherClient.getSocket().getOutputStream().write(toSend.length);
-				otherClient.getSocket().getOutputStream().write(toSend);
+				otherClient.getSocket().getOutputStream().write(bf.array());
 				otherClient.getSocket().getOutputStream().flush();
 			}
 			catch (IOException e) 
@@ -377,6 +385,7 @@ public class Server
 	}
 	
 	/**
+	 * END_REQUEST(long sessionID 8b)
 	 * ends the session and notifies both users
 	 * @param client the client that initiated the session end
 	 * @param input the message from the client in a Byte buffer, currently at position 1  OR null if no message
@@ -406,7 +415,7 @@ public class Server
 		
 		if(sesh == null)
 			return;
-		
+		//END_NOTIF(long sessionID 8b)
 		ByteBuffer bf = ByteBuffer.allocate(END_NOTIF_LENGTH+1);
 		bf = bf.put(END_NOTIF).putLong(sesh.SESSION_ID);
 					
@@ -420,42 +429,96 @@ public class Server
 			e.printStackTrace();
 		}
 		
-		byte[] sending = encrypt(bf.array(), partner.CK_Key);
-		
-		try
+		byte sending[] = null;
+		if(!partner.getSocket().isClosed())
 		{
-			partner.getSocket().getOutputStream().write(sending.length);
-			partner.getSocket().getOutputStream().write(sending);
-			partner.getSocket().getOutputStream().flush();
-		} 
-		catch (IOException e) 
-		{
-			e.printStackTrace();
+			sending = COMP_128.encrypt(bf.array(), partner.CK_Key);
+			bf = ByteBuffer.allocate(sending.length+Integer.BYTES).putInt(sending.length).put(sending);
+			
+			try
+			{
+				partner.getSocket().getOutputStream().write(bf.array());
+				partner.getSocket().getOutputStream().flush();
+			} 
+			catch (IOException e) 
+			{
+				e.printStackTrace();
+			}
 		}
 		
-		sending = encrypt(bf.array(), client.CK_Key);
-		try
+		if(!client.getSocket().isClosed())
 		{
-			client.getSocket().getOutputStream().write(sending.length);
-			client.getSocket().getOutputStream().write(sending);
-			client.getSocket().getOutputStream().flush();
-		} 
-		catch (IOException e) 
-		{
-			e.printStackTrace();
+			sending = COMP_128.encrypt(bf.array(), client.CK_Key);
+			bf = ByteBuffer.allocate(sending.length+Integer.BYTES).putInt(sending.length).put(sending);
+			try
+			{
+				client.getSocket().getOutputStream().write(bf.array());
+				client.getSocket().getOutputStream().flush();
+			} 
+			catch (IOException e) 
+			{
+				e.printStackTrace();
+			}
 		}
+		
 		partner.endSession();
 		client.endSession();
 		sessions.remove(sesh);
 	}
 
 	/**
+	 * HISTORY_REQ(long idB 8b)
 	 * sends the chat history to the requesting client
 	 * @param client the client requesting the history
 	 * @param input the message from the client in a Byte buffer, currently at position 1
 	 */
 	public void sendHistory(Client client, ByteBuffer input)
 	{
+		long clientIdB = input.getLong();
+		
+		ChatSession sesh = null;
+		if(!client.inSession())
+		{
+			return;
+		}
+		for(ChatSession s: sessions)
+		{
+			if(s.SESSION_ID == client.getCurSession())
+			{
+				sesh = s;
+				break;
+			}
+		}
+		try 
+		{
+			if(sesh == null || sesh.getPartner(client).ID!=clientIdB)
+			{
+				//TODO client partner not ID of request
+				return;
+			}
+		} 
+		catch (NoMemberException e) 
+		{
+			e.printStackTrace();
+		}
+		
+		ByteBuffer bf;
+		//HISTORY_RESP(long id 8b, message)
+		for(String message : sesh.getPartnerHistory(client))
+		{
+			bf = ByteBuffer.allocate(1 + Long.BYTES + message.length()).put(HISTORY_RESP).putLong(clientIdB).put(stringToByteArray(message));
+			byte enc[] = COMP_128.encrypt(bf.array(), client.CK_Key);
+			bf = ByteBuffer.allocate(enc.length+ Integer.BYTES).putInt(enc.length).put(enc);
+			try
+			{
+				client.getSocket().getOutputStream().write(bf.array());
+				client.getSocket().getOutputStream().flush();
+			}
+			catch (IOException e) 
+			{
+				e.printStackTrace();
+			}
+		}
 		//TODO sendHistory
 	}
 
@@ -516,14 +579,31 @@ public class Server
 		return ret;
 	}
 	
-	
-	private byte[] encrypt(byte[] b, SecretKeySpec key)
+	public static String getClientList()
 	{
-		return stringToByteArray(COMP_128.encrypt(byteToString(b),key));
+		try
+		{
+			clientSem.acquire();
+		}
+		catch(InterruptedException e)
+		{
+			e.printStackTrace();
+		}
+		
+		String ret = "";
+		
+		for(Client c : clients)
+		{
+			ret += c.ID+"\n";
+		}
+		
+		clientSem.release();
+		return ret;
 	}
-	private byte[] decrypt(byte[] b, SecretKeySpec key)
+	
+	public static void exit()
 	{
-		return stringToByteArray(COMP_128.decrypt(byteToString(b),key));
+		running = false;
 	}
 	
 	public static byte[] stringToByteArray(String s)
@@ -535,43 +615,21 @@ public class Server
 		}
 		return ret;
 	}
+	
 	public static String byteToString(byte[] b)
 	{
 		String ret = "";
 		for(int x =0; x< b.length; x++)
 		{
-			ret+= (byte)b[x];
+			ret+= (char)b[x];
 		}
 		return ret;
-	}
-	
+	}	
 	
 	public static void main(String args[])
 	{
-		/*
 		UserKeys.loadKeys();
-		ListeningSocket listener = null;
-		try 
-		{
-			listener = new ListeningSocket(UDP_DEFAULT_PORT);
-		}
-		catch (SocketException e)
-		{
-			e.printStackTrace();
-		}
-		Thread listenerThread = new Thread(listener);
-		listenerThread.start();
-		//new Server().start();
+		new Server().start();
 		UserKeys.saveKeys();
-		/*
-		SecretKeySpec s = COMP_128.genKey(123456l);
-		String message = "00001121000Fabcdefsdfefsdcdlhjvkjvkjvykca;lsdkfjas;fliawebfjawei;vbawiejf";
-		System.out.println(message);
-		System.out.println("Message length: "+message.length());
-		String enc = COMP_128.encrypt(message, s);
-		System.out.println("enc length: "+enc.length());
-		message = COMP_128.decrypt(enc, s);
-		System.out.println(message);
-		*/
 	}
 }

@@ -6,11 +6,8 @@ import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
-
-import serverChat.server.Client;
 
 public class UserKeys
 {
@@ -173,5 +170,17 @@ public class UserKeys
 		else
 			keys.put(id, key);
 		return true;
+	}
+	public static String[] genKey()
+	{
+		long newID = (long)(Math.random()*Long.MAX_VALUE);
+		while(keys.containsKey(newID))
+			newID++;
+		String key = COMP_128.gen_rand_128Bit();
+		
+		keys.put(newID, key);
+		
+		return new String[]{Long.toString(newID), key};
+		
 	}
 }

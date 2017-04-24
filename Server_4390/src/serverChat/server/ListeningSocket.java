@@ -47,7 +47,6 @@ public class ListeningSocket implements Runnable
 			{
 //wait for HELLO
 				socket.receive(p);
-				System.out.println("recieved packet from "+p.getAddress());
 				
 				ConnectionHandler h = new ConnectionHandler(p);
 				Thread next = new Thread(h);
@@ -126,6 +125,7 @@ public class ListeningSocket implements Runnable
 			}
 			catch (IOException e)
 			{
+				System.out.println("Failed to send CHALLENGE");
 				e.printStackTrace();
 				ds.close();
 				return;
@@ -142,8 +142,7 @@ public class ListeningSocket implements Runnable
 			{
 				try 
 				{
-					ds.receive(packet);
-					System.out.println("recieved RESPONSE");					
+					ds.receive(packet);					
 					break;
 				}
 				catch(SocketTimeoutException e)
@@ -195,21 +194,11 @@ public class ListeningSocket implements Runnable
 			
 			bf = ByteBuffer.allocate(1 + rand_cookie.length() + Integer.BYTES);
 			bf.put(Server.AUTH_SUCCESS);
-			for(int x =0; x< rand_cookie.length(); x++)
-			{
-				bf.put((byte)rand_cookie.charAt(x));
-			}
+			bf.put(Server.stringToByteArray(rand_cookie));
 			bf.putInt(port);
-			String message = "";
-			for(int x= 0; x< bf.array().length; x++)
-			{
-				message += (char)(bf.array()[x]);
-			}
-			String message_enc = COMP_128.encrypt(message, clientKey);
 			
-			byte toSend[] = new byte[message_enc.length()];
-			for(int x= 0; x<toSend.length; x++)
-				toSend[x] = (byte)message_enc.charAt(x);
+			byte toSend[] = COMP_128.encrypt(bf.array(), clientKey);
+			
 			packet.setData(toSend);
 			packet.setLength(toSend.length);
 			try 
@@ -285,10 +274,10 @@ public class ListeningSocket implements Runnable
 //DONE establish TCP connection on port port_number, store port
 //receive CONNECT(rand_cookie 16 b)
 			Client client = new Client(clientSock,id, clientKey);
-			byte cookie_ret[] = new byte[44];
+			byte cookie_ret[] = new byte[32];
 			try 
 			{
-				if(clientSock.getInputStream().read(cookie_ret)!=44)
+				if(clientSock.getInputStream().read(cookie_ret)!=32)
 				{
 					throw new IOException();
 				}
@@ -307,13 +296,14 @@ public class ListeningSocket implements Runnable
 				}
 				return;
 			}
+
+			cookie_ret = COMP_128.decrypt(cookie_ret, client.CK_Key);
 			String cRet = "";
-			for(int x =0; x< cookie_ret.length; x++)
+			for(int x =1; x< cookie_ret.length; x++)
 			{
-				cRet+= (char)cookie_ret[x];
+				cRet += (char)cookie_ret[x];
 			}
-			cRet = COMP_128.decrypt(cRet, client.CK_Key);
-			if(!cRet.substring(1).equals(rand_cookie))
+			if(!cRet.equals(rand_cookie))
 			{
 				System.out.println("Keys not the same, exiting");
 				failConnect();

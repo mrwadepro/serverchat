@@ -22,6 +22,19 @@ public class ChatSession
 		messageHistoryB = new ArrayList<String>();
 	}
 	
+	public ArrayList<String> getPartnerHistory(Client a)
+	{
+		if(a == clientA)
+		{
+			return messageHistoryB;
+		}
+		else if(a == clientB)
+		{
+			return messageHistoryA;
+		}
+		else return null;
+	}
+	
 	public void addMessage(Client source, String message) throws NoMemberException
 	{
 		if(clientA == source)

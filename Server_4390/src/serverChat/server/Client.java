@@ -6,7 +6,7 @@ import javax.crypto.spec.SecretKeySpec;
 
 public class Client
 {
-	public static final long TIMEOUT_MAX = 15000;
+	public static final long TIMEOUT_MAX = 60_000 * 10;//10 minutes
 	
 	public final long ID;
 	public final SecretKeySpec CK_Key;
